@@ -128,7 +128,7 @@ unprotected_with_config(Name, ParsedConfig) ->
                     erlang:halt(2);
                 Files ->
                     case Config#config.out of
-                        check -> io:format(standard_error, "Checking formatting...~n", []);
+                        check -> print_check_start();
                         _ -> ok
                     end,
                     FormatFileFun = fun(File) ->
@@ -139,20 +139,12 @@ unprotected_with_config(Name, ParsedConfig) ->
                         ok ->
                             case Config#config.out of
                                 check ->
-                                    io:format(
-                                        standard_error,
-                                        "All matched files use erlfmt code style!~n",
-                                        []
-                                    );
+                                    print_check_end();
                                 _ ->
                                     ok
                             end;
                         warn ->
-                            io:format(
-                                standard_error,
-                                "[warn] Code style issues found in the above file(s). Forgot to run erlfmt?~n",
-                                []
-                            ),
+                            print_check_warn(), 
                             erlang:halt(1);
                         error ->
                             erlang:halt(4)
@@ -188,7 +180,7 @@ format_file(FileName, Config) ->
     #config{pragma = Pragma, print_width = PrintWidth, verbose = Verbose, out = Out, range = Range} =
         Config,
     case Verbose of
-        true -> io:format(standard_error, "Formatting ~s\n", [FileName]);
+        true -> print_verbose_formatting(FileName);
         false -> ok
     end,
     Options =
@@ -221,7 +213,7 @@ format_file(FileName, Config) ->
             write_formatted(FileName, FormattedText, Out);
         {warn, Warnings} ->
             [print_error_info(Warning) || Warning <- Warnings],
-            print_filename_warning(FileName),
+            print_formatting_warning(FileName),
             warn;
         {skip, RawString} ->
             write_formatted(FileName, RawString, Out);
@@ -230,12 +222,55 @@ format_file(FileName, Config) ->
             error
     end.
 
-print_filename_warning(FileName) ->
-    print_filename_warning(erlang:get(pretty_print), FileName).
+print_check_start() ->
+    print_check_start(pretty_print()).
+print_check_start(github) ->
+    io:format(standard_error, "::group::Checking formatting...~n", []);
+print_check_start(_) ->
+    io:format(standard_error, "Checking formatting...~n", []).
 
-print_filename_warning(github, FileName) ->
-    io:format(standard_error, "::notice file=~s::File ~s has warnings~n", [FileName, FileName]);
-print_filename_warning(_, FileName) ->
+print_check_warn() ->
+    print_check_warn(pretty_print()).
+
+print_check_warn(github) ->
+    io:format(
+        standard_error,
+        "::error title=\"code style\"::File(s) have code style issues.~n",
+        []
+    ),
+    io:format(standard_error, "::endgroup::~n", []);
+print_check_warn(_) ->
+    io:format(
+        standard_error,
+        "[warn] Code style issues found in the above file(s). Forgot to run erlfmt?~n",
+        []
+    ).
+
+print_check_end() ->
+    print_check_end(pretty_print()).
+
+print_check_end(github) ->
+    io:format(standard_error, "All matched files use erlfmt code style!~n"
+                              "::endgroup::~n", []);
+print_check_end(_) ->
+    io:format(
+        standard_error,
+        "All matched files use erlfmt code style!~n",
+        []
+    ).
+
+print_verbose_formatting(FileName) ->
+    print_verbose_formatting(pretty_print(), FileName).
+
+print_verbose_formatting(_, FileName) ->
+    io:format(standard_error, "Formatting ~s\n", [FileName]).
+
+print_formatting_warning(FileName) ->
+    print_formatting_warning(pretty_print(), FileName).
+
+print_formatting_warning(github, FileName) ->
+    io:format(standard_error, "::warning file=~s::File ~s has formatting warnings~n", [FileName, FileName]);
+print_formatting_warning(_, FileName) ->
     io:format(standard_error, "[warn] ~s\n", [FileName]).
 
 write_formatted(_FileName, _Formatted, check) ->
@@ -509,16 +544,17 @@ expand_files(NewFiles, Files) when is_list(NewFiles) ->
     lists:foldl(fun expand_files/2, Files, NewFiles).
 
 print_error_info(Info) ->
-    Pretty = erlang:get(pretty_print),
-    print_error_info(Pretty, Info).
+    print_error_info(pretty_print(), Info).
 
 print_error_info(github, {File, Line, _, _}=Info) ->
     io:format(standard_error, "::warning file=~s,line=~b::~s~n", [File, Line, erlfmt:format_error_info(Info)]);
 print_error_info(github, Info) ->
-    io:format("~p", [Info]),
-    io:put_chars(standard_error, [ erlfmt:format_error_info(Info), $\n]);
+    io:format(standard_error, "::warning::~s~n", [ erlfmt:format_error_info(Info)]);
 print_error_info(_, Info) ->
     io:put_chars(standard_error, [erlfmt:format_error_info(Info), $\n]).
+
+pretty_print() ->
+    erlang:get(pretty_print).
 
 parallel(Fun, List) ->
     N = erlang:system_info(schedulers) * 2,
