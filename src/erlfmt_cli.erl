@@ -221,7 +221,7 @@ format_file(FileName, Config) ->
             write_formatted(FileName, FormattedText, Out);
         {warn, Warnings} ->
             [print_error_info(Warning) || Warning <- Warnings],
-            io:format(standard_error, "[warn] ~s\n", [FileName]),
+            print_filename_warning(FileName),
             warn;
         {skip, RawString} ->
             write_formatted(FileName, RawString, Out);
@@ -229,6 +229,14 @@ format_file(FileName, Config) ->
             print_error_info(Error),
             error
     end.
+
+print_filename_warning(FileName) ->
+    print_filename_warning(erlang:get(pretty_print), FileName).
+
+print_filename_warning(github, FileName) ->
+    io:format(standard_error, "::notice file=~s::File ~s has warnings~n", [FileName, FileName]);
+print_filename_warning(_, FileName) ->
+    io:format(standard_error, "[warn] ~s\n", [FileName]).
 
 write_formatted(_FileName, _Formatted, check) ->
     ok;
@@ -507,6 +515,7 @@ print_error_info(Info) ->
 print_error_info(github, {File, Line, _, _}=Info) ->
     io:format(standard_error, "::warning file=~s,line=~b::~s~n", [File, Line, erlfmt:format_error_info(Info)]);
 print_error_info(github, Info) ->
+    io:format("~p", [Info]),
     io:put_chars(standard_error, [ erlfmt:format_error_info(Info), $\n]);
 print_error_info(_, Info) ->
     io:put_chars(standard_error, [erlfmt:format_error_info(Info), $\n]).
