@@ -19,6 +19,7 @@
 
 -record(config, {
     verbose = false :: boolean(),
+    pretty_print = undefined :: undefined | plain | github,
     print_width = undefined :: undefined | pos_integer(),
     pragma = ignore :: erlfmt:pragma(),
     out = standard_out :: out(),
@@ -38,6 +39,8 @@ opts() ->
             "Check if your files are formatted. "
             "Get exit code 1, if some files are not formatted. "
             "--write is not supported."},
+        {pretty_print, undefined, "pretty-print", string,
+            "Format to print result as (plain | github)"}, 
         {print_width, undefined, "print-width", integer,
             "The line length that formatter would wrap on"},
         {require_pragma, undefined, "require-pragma", undefined,
@@ -117,6 +120,7 @@ set_difference(Files, Excludes) ->
 unprotected_with_config(Name, ParsedConfig) ->
     case ParsedConfig of
         {format, Files0, Excludes, Config} ->
+            Pretty = set_pretty_printing(Config),
             case set_difference(Files0, Excludes) of
                 [] ->
                     io:put_chars(standard_error, ["no files provided to format\n\n"]),
@@ -127,7 +131,11 @@ unprotected_with_config(Name, ParsedConfig) ->
                         check -> io:format(standard_error, "Checking formatting...~n", []);
                         _ -> ok
                     end,
-                    case parallel(fun(File) -> format_file(File, Config) end, Files) of
+                    FormatFileFun = fun(File) ->
+                        set_pretty_printing(Pretty),
+                        format_file(File, Config)
+                    end,
+                    case parallel(FormatFileFun, Files) of
                         ok ->
                             case Config#config.out of
                                 check ->
@@ -161,6 +169,19 @@ unprotected_with_config(Name, ParsedConfig) ->
             {ok, Vsn} = application:get_key(erlfmt, vsn),
             io:format("~s version ~s\n", [Name, Vsn]),
             erlang:halt(0)
+    end.
+
+set_pretty_printing(#config{pretty_print = Pretty}) ->
+    set_pretty_printing(Pretty);
+set_pretty_printing(P) when P == plain; P == github ->
+    erlang:put(pretty_print, P),
+    P;
+set_pretty_printing(undefined) ->
+    case string:casefold(os:getenv("GITHUB_ACTIONS", "false")) of
+        "true" ->
+            set_pretty_printing(github);
+        "false" ->
+            set_pretty_printing(plain)
     end.
 
 format_file(FileName, Config) ->
@@ -310,6 +331,19 @@ parse_opts([check | _Rest], _Files, _Exclude, #config{out = Out}) when Out =/= s
     {error, "--check mode can't be combined write or replace mode"};
 parse_opts([check | Rest], Files, Exclude, Config) ->
     parse_opts(Rest, Files, Exclude, Config#config{out = check});
+parse_opts([{pretty_print, Value} | Rest], Files, Exclude, Config) ->
+    case
+        case string:casefold(Value) of
+            "github" -> github;
+            "plain" -> plain;
+            Other -> {error, Other}
+        end
+    of
+        {error, Unsupported} ->
+            {error, ["Unsupported pretty printing: ", Unsupported]};
+        Pretty when is_atom(Pretty) ->
+            parse_opts(Rest, Files, Exclude, Config#config{pretty_print = Pretty})
+    end;
 parse_opts([{print_width, Value} | Rest], Files, Exclude, Config) ->
     parse_opts(Rest, Files, Exclude, Config#config{print_width = Value});
 parse_opts([require_pragma | _Rest], _Files, _Exclude, #config{pragma = insert}) ->
@@ -400,6 +434,7 @@ resolve_files(PreferFiles, _DefaultFiles) -> PreferFiles.
 resolve_config(
     #config{
         verbose = PreferVerbose,
+        pretty_print = PreferPretty,
         print_width = PreferWidth,
         pragma = PreferPragma,
         out = PreferOut,
@@ -407,6 +442,7 @@ resolve_config(
     },
     #config{
         verbose = DefaultVerbose,
+        pretty_print = DefaultPretty,
         print_width = DefaultWidth,
         pragma = DefaultPragma,
         out = DefaultOut,
@@ -415,11 +451,15 @@ resolve_config(
 ) ->
     #config{
         verbose = PreferVerbose orelse DefaultVerbose,
+        pretty_print = resolve_pretty(PreferPretty, DefaultPretty),
         print_width = resolve_width(PreferWidth, DefaultWidth),
         pragma = resolve_pragma(PreferPragma, DefaultPragma),
         out = resolve_out(PreferOut, DefaultOut),
         range = resolve_range(PreferRange, DefaultRange)
     }.
+
+resolve_pretty(undefined, P) -> P;
+resolve_pretty(P, _) -> P.
 
 resolve_width(undefined, W) -> W;
 resolve_width(W, _) -> W.
@@ -461,6 +501,14 @@ expand_files(NewFiles, Files) when is_list(NewFiles) ->
     lists:foldl(fun expand_files/2, Files, NewFiles).
 
 print_error_info(Info) ->
+    Pretty = erlang:get(pretty_print),
+    print_error_info(Pretty, Info).
+
+print_error_info(github, {File, Line, _, _}=Info) ->
+    io:format(standard_error, "::warning file=~s,line=~b::~s~n", [File, Line, erlfmt:format_error_info(Info)]);
+print_error_info(github, Info) ->
+    io:put_chars(standard_error, [ erlfmt:format_error_info(Info), $\n]);
+print_error_info(_, Info) ->
     io:put_chars(standard_error, [erlfmt:format_error_info(Info), $\n]).
 
 parallel(Fun, List) ->
